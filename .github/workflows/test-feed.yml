@@ -17,7 +17,7 @@ jobs:
           python-version: "3.11"
 
       - name: Installa dipendenze
-        run: pip install feedparser requests python-dateutil
+        run: pip install feedparser requests python-dateutil beautifulsoup4
 
       - name: Verifica i feed
         env:
