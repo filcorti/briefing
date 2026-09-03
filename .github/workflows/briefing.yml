@@ -26,7 +26,7 @@ jobs:
           python-version: "3.11"
 
       - name: Installa dipendenze
-        run: pip install feedparser anthropic trafilatura requests python-dateutil
+        run: pip install feedparser anthropic trafilatura requests python-dateutil beautifulsoup4
 
       - name: Genera il briefing
         env:
