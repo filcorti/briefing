@@ -26,16 +26,21 @@ GRUPPI = [
         "max": 6,
         "fonti": [
             {"nome": "ISW – Institute for the Study of War", "sigla": "ISW",
-             "rss": "https://understandingwar.org/feed/"},
+             "rss": ["https://www.understandingwar.org/rss.xml",
+                     "https://understandingwar.org/feed/",
+                     "https://www.iswresearch.org/feeds/posts/default?alt=rss"]},
             {"nome": "RUSI", "sigla": "RUSI",
-             "rss": "https://www.rusi.org/rss/commentary.xml"},
+             "rss": ["https://www.rusi.org/rss/latest-commentary.xml",
+                     "https://www.rusi.org/rss/latest-publications.xml"]},
             {"nome": "Jamestown – Eurasia Daily Monitor", "sigla": "JAMESTOWN",
              "rss": "https://jamestown.org/feed/"},
             {"nome": "Gian Raffaele Percannella (Substack)", "sigla": "PERCANNELLA",
              "rss": "https://gianraffaelepercannella.substack.com/feed",
              "sempre": True},   # mai scartato dalla prioritizzazione
             {"nome": "Carnegie Politika", "sigla": "POLITIKA",
-             "rss": "https://carnegieendowment.org/posts/rss?lang=en&center=russia-eurasia"},
+             "rss": ["https://carnegieendowment.org/rss/politika.xml",
+                     "https://carnegie.ru/feed",
+                     "https://carnegieendowment.org/posts/rss?lang=en&center=russia-eurasia"]},
             {"nome": "Meduza (EN)", "sigla": "MEDUZA",
              "rss": "https://meduza.io/rss/en/all"},
             {"nome": "Kyiv Independent", "sigla": "KYIVIND",
@@ -47,7 +52,8 @@ GRUPPI = [
         "max": 6,
         "fonti": [
             {"nome": "U.S. Central Command", "sigla": "CENTCOM",
-             "rss": "https://www.centcom.mil/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=1076&max=20"},
+             "rss": ["https://www.centcom.mil/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=1076&max=20",
+                     "https://www.centcom.mil/RSS/News/"]},
             {"nome": "The Cradle", "sigla": "CRADLE",
              "rss": "https://thecradle.co/feed"},
             {"nome": "MEMRI – Middle East Media Research", "sigla": "MEMRI",
@@ -97,11 +103,15 @@ GRUPPI = [
         "max": 5,
         "fonti": [
             {"nome": "Carnegie Endowment", "sigla": "CARNEGIE",
-             "rss": "https://carnegieendowment.org/posts/rss?lang=en"},
+             "rss": ["https://carnegieendowment.org/rss/analysis.xml",
+                     "https://carnegieendowment.org/feed",
+                     "https://carnegieendowment.org/posts/rss?lang=en"]},
             {"nome": "ISPI", "sigla": "ISPI",
              "rss": "https://www.ispionline.it/it/rss.xml"},
             {"nome": "Limes", "sigla": "LIMES",
-             "rss": "https://www.limesonline.com/rss.xml"},
+             "rss": ["https://www.limesonline.com/feed/",
+                     "https://www.limesonline.com/rss",
+                     "https://www.limesonline.com/feed/rss"]},
             {"nome": "ECFR", "sigla": "ECFR",
              "rss": "https://ecfr.eu/feed/"},
             {"nome": "Foreign Affairs", "sigla": "FA",
@@ -261,66 +271,84 @@ def prioritizza(client, nome_sezione, candidati, quanti):
 #  FETCH FEED                                                        #
 # ------------------------------------------------------------------ #
 
-def fetch_articoli(fonte, data_limite):
-    """Ritorna lista di dict {titolo, url, data, excerpt} per la fonte.
-
-    Distingue tre casi nel log:
-      FEED ROTTO   -> status HTTP != 200, o nessuna voce parsata
-      NIENTE NUOVO -> feed valido, ma tutte le voci sono fuori finestra
-      N articoli   -> tutto ok
-    """
+def _prova_url(sigla, url_rss, data_limite, silenzioso=False):
+    """Prova un singolo URL. Ritorna (articoli, esito, dettaglio)."""
     import feedparser, requests
-
-    sigla = fonte["sigla"]
-    url_rss = fonte["rss"]
 
     try:
         r = requests.get(url_rss, headers=HEADERS, timeout=20, allow_redirects=True)
     except Exception as e:
-        print(f"  [{sigla}] FEED ROTTO — rete: {type(e).__name__}: {e}")
-        return []
+        return [], "rotto", f"rete: {type(e).__name__}"
 
     if r.status_code != 200:
-        print(f"  [{sigla}] FEED ROTTO — HTTP {r.status_code} su {url_rss}")
-        return []
+        return [], "rotto", f"HTTP {r.status_code}"
 
     feed = feedparser.parse(r.content)
     totale = len(feed.entries)
-
     if totale == 0:
         tipo = r.headers.get("Content-Type", "?").split(";")[0]
-        print(f"  [{sigla}] FEED ROTTO — 0 voci parsate (Content-Type: {tipo}). "
-              f"L'URL probabilmente non e' un RSS valido.")
-        return []
+        return [], "rotto", f"0 voci parsate (Content-Type: {tipo})"
 
-    articoli, senza_data = [], 0
-    piu_recente = None
+    articoli, piu_recente = [], None
     for entry in feed.entries:
         d = normalizza_data(entry)
         if d is None:
-            senza_data += 1
             continue
         if piu_recente is None or d > piu_recente:
             piu_recente = d
         if d < data_limite:
             continue
-        titolo = getattr(entry, "title", "(senza titolo)")
-        link = getattr(entry, "link", "")
         excerpt = ""
         for campo in ("summary", "description"):
             raw = getattr(entry, campo, "")
             if raw:
                 excerpt = re.sub(r"<[^>]+>", "", raw)[:600]
                 break
-        articoli.append({"titolo": titolo, "url": link, "data": d, "excerpt": excerpt})
+        articoli.append({
+            "titolo": getattr(entry, "title", "(senza titolo)"),
+            "url": getattr(entry, "link", ""),
+            "data": d,
+            "excerpt": excerpt,
+        })
 
     if articoli:
-        print(f"  [{sigla}] {len(articoli)} articolo/i in finestra (su {totale} nel feed)")
-    else:
-        nota = f"ultimo del {piu_recente}" if piu_recente else "nessuna data leggibile"
-        extra = f", {senza_data} voci senza data" if senza_data else ""
-        print(f"  [{sigla}] NIENTE NUOVO — feed ok, {totale} voci, {nota}{extra}")
-    return articoli
+        return articoli, "ok", f"{len(articoli)} in finestra su {totale}"
+    nota = f"ultimo del {piu_recente}" if piu_recente else "nessuna data leggibile"
+    return [], "muto", f"{totale} voci, {nota}"
+
+
+def fetch_articoli(fonte, data_limite):
+    """Ritorna gli articoli della fonte in finestra.
+
+    Il campo "rss" puo' essere una stringa o una lista di URL candidati:
+    vengono provati in ordine e si tiene il primo che funziona.
+    """
+    sigla = fonte["sigla"]
+    candidati = fonte["rss"]
+    if isinstance(candidati, str):
+        candidati = [candidati]
+
+    fallimenti = []
+    for i, url_rss in enumerate(candidati):
+        articoli, esito, dettaglio = _prova_url(sigla, url_rss, data_limite)
+
+        if esito == "ok":
+            marca = "" if i == 0 else f"  [via candidato #{i+1}: {url_rss}]"
+            print(f"  [{sigla}] {dettaglio}{marca}")
+            return articoli
+
+        if esito == "muto":
+            print(f"  [{sigla}] NIENTE NUOVO — feed ok, {dettaglio}")
+            if i > 0:
+                print(f"           URL buono: {url_rss}")
+            return []
+
+        fallimenti.append(f"{url_rss} -> {dettaglio}")
+
+    print(f"  [{sigla}] FEED ROTTO — {len(fallimenti)} candidato/i falliti:")
+    for f in fallimenti:
+        print(f"           {f}")
+    return []
 
 # ------------------------------------------------------------------ #
 #  RENDER HTML                                                       #
