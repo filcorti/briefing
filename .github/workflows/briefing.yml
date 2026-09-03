@@ -4,10 +4,10 @@ on:
   schedule:
     # 05:30 UTC = 07:30 ora italiana (estate) / 06:30 (inverno)
     - cron: "30 5 * * *"
-  workflow_dispatch:        # bottone per lanciarlo a mano dal telefono
+  workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write        # serve per ricommittare visti.json
   pages: write
   id-token: write
 
@@ -31,14 +31,27 @@ jobs:
       - name: Genera il briefing
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          PYTHONUNBUFFERED: "1"
         run: python genera_briefing.py --giorni 1
+
+      - name: Salva l'archivio degli articoli visti
+        run: |
+          if [[ -n "$(git status --porcelain visti.json)" ]]; then
+            git config user.name  "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add visti.json
+            git commit -m "Archivio articoli visti — $(date +%F)"
+            # se nel frattempo main e' cambiato, riallineo prima di spingere
+            git pull --rebase --autostash origin main
+            git push
+          else
+            echo "Nessuna modifica all'archivio."
+          fi
 
       - name: Prepara il sito
         run: |
           mkdir -p public/archivio
-          # il briefing di oggi diventa la homepage
           cp "$(ls -t briefing_*.html | head -1)" public/index.html
-          # e viene anche archiviato con la sua data
           cp briefing_*.html public/archivio/
 
       - uses: actions/upload-pages-artifact@v3
