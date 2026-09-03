@@ -15,6 +15,7 @@ USO
 """
 
 import os, sys, html, datetime, re, time
+from dateutil import parser as dateparser
 
 # ------------------------------------------------------------------ #
 #  CONFIGURAZIONE FONTI (gruppi tematici)                            #
@@ -34,8 +35,8 @@ GRUPPI = [
                      "https://www.rusi.org/rss/latest-publications.xml"]},
             {"nome": "Jamestown – Eurasia Daily Monitor", "sigla": "JAMESTOWN",
              "rss": "https://jamestown.org/feed/"},
-            {"nome": "Gian Raffaele Percannella (Substack)", "sigla": "PERCANNELLA",
-             "rss": "https://gianraffaelepercannella.substack.com/feed",
+            {"nome": "Gian Raffaele Percannella (Telegram COMFOG)", "sigla": "PERCANNELLA",
+             "tipo": "telegram", "canale": "comfog",
              "sempre": True},   # mai scartato dalla prioritizzazione
             {"nome": "Carnegie Politika", "sigla": "POLITIKA",
              "rss": ["https://carnegieendowment.org/rss/politika.xml",
@@ -317,12 +318,92 @@ def _prova_url(sigla, url_rss, data_limite, silenzioso=False):
     return [], "muto", f"{totale} voci, {nota}"
 
 
+def _fetch_telegram(fonte, data_limite):
+    """Legge un canale Telegram pubblico dalla pagina di anteprima t.me/s/<canale>.
+
+    Non serve account ne' API: la pagina e' HTML pubblico. Ogni post diventa
+    un "articolo" con titolo (prima riga), url (link permanente al post),
+    data e testo completo come excerpt.
+    """
+    import requests
+    from bs4 import BeautifulSoup
+
+    sigla = fonte["sigla"]
+    canale = fonte["canale"]
+    url = f"https://t.me/s/{canale}"
+
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=20)
+    except Exception as e:
+        print(f"  [{sigla}] TELEGRAM ROTTO — rete: {type(e).__name__}")
+        return []
+
+    if r.status_code != 200:
+        print(f"  [{sigla}] TELEGRAM ROTTO — HTTP {r.status_code} su {url}")
+        return []
+
+    soup = BeautifulSoup(r.text, "html.parser")
+    blocchi = soup.select("div.tgme_widget_message")
+    if not blocchi:
+        print(f"  [{sigla}] TELEGRAM ROTTO — nessun post nella pagina. "
+              f"Il canale e' privato o il nome e' sbagliato?")
+        return []
+
+    articoli, piu_recente = [], None
+    for b in blocchi:
+        tag_testo = b.select_one("div.tgme_widget_message_text")
+        testo = tag_testo.get_text("\n", strip=True) if tag_testo else ""
+        if len(testo) < 40:          # scarta post di sole immagini o reazioni
+            continue
+
+        tag_data = b.select_one("time[datetime]")
+        if not tag_data:
+            continue
+        try:
+            d = dateparser.parse(tag_data["datetime"]).date()
+        except Exception:
+            continue
+
+        if piu_recente is None or d > piu_recente:
+            piu_recente = d
+        if d < data_limite:
+            continue
+
+        link = ""
+        tag_link = b.select_one("a.tgme_widget_message_date")
+        if tag_link and tag_link.get("href"):
+            link = tag_link["href"]
+
+        # il titolo e' la prima riga significativa, il resto resta nel corpo
+        righe = [r_.strip() for r_ in testo.split("\n") if r_.strip()]
+        titolo = righe[0][:180] if righe else "(post senza testo)"
+
+        articoli.append({
+            "titolo": titolo,
+            "url": link,
+            "data": d,
+            "excerpt": testo[:1500],
+            "telegram": True,          # segnala che il testo e' gia' completo
+        })
+
+    if articoli:
+        print(f"  [{sigla}] {len(articoli)} post in finestra (su {len(blocchi)} nella pagina)")
+    else:
+        nota = f"ultimo del {piu_recente}" if piu_recente else "nessuna data leggibile"
+        print(f"  [{sigla}] NIENTE NUOVO — canale ok, {len(blocchi)} post, {nota}")
+    return articoli
+
+
 def fetch_articoli(fonte, data_limite):
     """Ritorna gli articoli della fonte in finestra.
 
     Il campo "rss" puo' essere una stringa o una lista di URL candidati:
     vengono provati in ordine e si tiene il primo che funziona.
+    Se la fonte ha "tipo": "telegram", legge invece il canale via t.me/s/.
     """
+    if fonte.get("tipo") == "telegram":
+        return _fetch_telegram(fonte, data_limite)
+
     sigla = fonte["sigla"]
     candidati = fonte["rss"]
     if isinstance(candidati, str):
@@ -560,7 +641,12 @@ def main():
         # --- FASE 3: sintesi solo dei selezionati ---
         for fonte, art in selezionati:
             print(f"    → {art['titolo'][:70]}...")
-            testo = estrai_testo(art["url"]) if not fonte.get("paywall") else None
+            if art.get("telegram"):
+                testo = art["excerpt"]          # il post e' gia' il testo completo
+            elif fonte.get("paywall"):
+                testo = None
+            else:
+                testo = estrai_testo(art["url"])
             if not testo:
                 testo = art["excerpt"]
             if testo and len(testo) > 80:
