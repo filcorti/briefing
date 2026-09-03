@@ -26,20 +26,20 @@ GRUPPI = [
         "max": 6,
         "fonti": [
             {"nome": "ISW – Institute for the Study of War", "sigla": "ISW",
-             "rss": "https://www.iswresearch.org/feeds/posts/default?alt=rss"},
+             "rss": "https://understandingwar.org/feed/"},
             {"nome": "RUSI", "sigla": "RUSI",
-             "rss": "https://www.rusi.org/rss.xml"},
+             "rss": "https://www.rusi.org/rss/commentary.xml"},
             {"nome": "Jamestown – Eurasia Daily Monitor", "sigla": "JAMESTOWN",
-             "rss": "https://jamestown.org/programs/edm/feed/"},
+             "rss": "https://jamestown.org/feed/"},
             {"nome": "Gian Raffaele Percannella (Substack)", "sigla": "PERCANNELLA",
              "rss": "https://gianraffaelepercannella.substack.com/feed",
              "sempre": True},   # mai scartato dalla prioritizzazione
             {"nome": "Carnegie Politika", "sigla": "POLITIKA",
-             "rss": "https://carnegieendowment.org/rss/politika.xml"},
+             "rss": "https://carnegieendowment.org/posts/rss?lang=en&center=russia-eurasia"},
             {"nome": "Meduza (EN)", "sigla": "MEDUZA",
              "rss": "https://meduza.io/rss/en/all"},
             {"nome": "Kyiv Independent", "sigla": "KYIVIND",
-             "rss": "https://kyivindependent.com/feed/"},
+             "rss": "https://kyivindependent.com/news-archive/rss/"},
         ]
     },
     {
@@ -47,7 +47,7 @@ GRUPPI = [
         "max": 6,
         "fonti": [
             {"nome": "U.S. Central Command", "sigla": "CENTCOM",
-             "rss": "https://www.centcom.mil/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=1076&max=25"},
+             "rss": "https://www.centcom.mil/DesktopModules/ArticleCS/RSS.ashx?ContentType=1&Site=1076&max=20"},
             {"nome": "The Cradle", "sigla": "CRADLE",
              "rss": "https://thecradle.co/feed"},
             {"nome": "MEMRI – Middle East Media Research", "sigla": "MEMRI",
@@ -73,7 +73,7 @@ GRUPPI = [
             {"nome": "The Record (cyber-intel)", "sigla": "RECORD",
              "rss": "https://therecord.media/feed"},
             {"nome": "Statewatch", "sigla": "STATEWATCH",
-             "rss": "https://www.statewatch.org/rss/news.xml"},
+             "rss": "https://www.statewatch.org/rss/"},
         ]
     },
     {
@@ -97,11 +97,11 @@ GRUPPI = [
         "max": 5,
         "fonti": [
             {"nome": "Carnegie Endowment", "sigla": "CARNEGIE",
-             "rss": "https://carnegieendowment.org/rss/solr/?fa=pubs"},
+             "rss": "https://carnegieendowment.org/posts/rss?lang=en"},
             {"nome": "ISPI", "sigla": "ISPI",
              "rss": "https://www.ispionline.it/it/rss.xml"},
             {"nome": "Limes", "sigla": "LIMES",
-             "rss": "https://www.limesonline.com/feed"},
+             "rss": "https://www.limesonline.com/rss.xml"},
             {"nome": "ECFR", "sigla": "ECFR",
              "rss": "https://ecfr.eu/feed/"},
             {"nome": "Foreign Affairs", "sigla": "FA",
@@ -449,6 +449,23 @@ def main():
     data_oggi = oggi_utc()
     data_limite = finestra(GIORNI)
     nome_file = f"briefing_{data_oggi}.html"
+
+    # --- MODALITÀ TEST FEED (no API, solo rete) ---
+    if "--test-feed" in sys.argv:
+        print(f"Verifica feed — finestra: dal {data_limite}\n")
+        vivi = []
+        for gruppo in GRUPPI:
+            print(f"\n{gruppo['nome']}")
+            for fonte in gruppo["fonti"]:
+                if fetch_articoli(fonte, data_limite):
+                    vivi.append(fonte["sigla"])
+        totale = sum(len(g["fonti"]) for g in GRUPPI)
+        print("\n" + "=" * 58)
+        print(f"  {len(vivi)}/{totale} feed hanno prodotto articoli")
+        print(f"  {', '.join(vivi) if vivi else 'nessuno'}")
+        print("=" * 58)
+        print("\nCorreggi in GRUPPI gli URL delle righe FEED ROTTO qui sopra.")
+        return
 
     # --- MODALITÀ ESEMPIO (no API, no rete) ---
     if esempio:
