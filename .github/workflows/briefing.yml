@@ -1,0 +1,56 @@
+name: Briefing geopolitico
+
+on:
+  schedule:
+    # 05:30 UTC = 07:30 ora italiana (estate) / 06:30 (inverno)
+    - cron: "30 5 * * *"
+  workflow_dispatch:        # bottone per lanciarlo a mano dal telefono
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  genera:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze
+        run: pip install feedparser anthropic trafilatura requests python-dateutil
+
+      - name: Genera il briefing
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python genera_briefing.py --giorni 1
+
+      - name: Prepara il sito
+        run: |
+          mkdir -p public/archivio
+          # il briefing di oggi diventa la homepage
+          cp "$(ls -t briefing_*.html | head -1)" public/index.html
+          # e viene anche archiviato con la sua data
+          cp briefing_*.html public/archivio/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  pubblica:
+    needs: genera
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
