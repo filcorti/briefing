@@ -26,7 +26,7 @@ GRUPPI = [
         "max": 6,
         "fonti": [
             {"nome": "ISW – Institute for the Study of War", "sigla": "ISW",
-             "rss": "https://www.understandingwar.org/rss.xml"},
+             "rss": "https://www.iswresearch.org/feeds/posts/default?alt=rss"},
             {"nome": "RUSI", "sigla": "RUSI",
              "rss": "https://www.rusi.org/rss.xml"},
             {"nome": "Jamestown – Eurasia Daily Monitor", "sigla": "JAMESTOWN",
@@ -262,23 +262,47 @@ def prioritizza(client, nome_sezione, candidati, quanti):
 # ------------------------------------------------------------------ #
 
 def fetch_articoli(fonte, data_limite):
-    """Ritorna lista di dict {titolo, url, data, excerpt} per la fonte."""
+    """Ritorna lista di dict {titolo, url, data, excerpt} per la fonte.
+
+    Distingue tre casi nel log:
+      FEED ROTTO   -> status HTTP != 200, o nessuna voce parsata
+      NIENTE NUOVO -> feed valido, ma tutte le voci sono fuori finestra
+      N articoli   -> tutto ok
+    """
     import feedparser, requests
 
     sigla = fonte["sigla"]
     url_rss = fonte["rss"]
 
     try:
-        r = requests.get(url_rss, headers=HEADERS, timeout=20)
-        feed = feedparser.parse(r.content)
+        r = requests.get(url_rss, headers=HEADERS, timeout=20, allow_redirects=True)
     except Exception as e:
-        print(f"  [{sigla}] FEED NON RAGGIUNTO: {e}")
+        print(f"  [{sigla}] FEED ROTTO — rete: {type(e).__name__}: {e}")
         return []
 
-    articoli = []
+    if r.status_code != 200:
+        print(f"  [{sigla}] FEED ROTTO — HTTP {r.status_code} su {url_rss}")
+        return []
+
+    feed = feedparser.parse(r.content)
+    totale = len(feed.entries)
+
+    if totale == 0:
+        tipo = r.headers.get("Content-Type", "?").split(";")[0]
+        print(f"  [{sigla}] FEED ROTTO — 0 voci parsate (Content-Type: {tipo}). "
+              f"L'URL probabilmente non e' un RSS valido.")
+        return []
+
+    articoli, senza_data = [], 0
+    piu_recente = None
     for entry in feed.entries:
         d = normalizza_data(entry)
-        if d is None or d < data_limite:
+        if d is None:
+            senza_data += 1
+            continue
+        if piu_recente is None or d > piu_recente:
+            piu_recente = d
+        if d < data_limite:
             continue
         titolo = getattr(entry, "title", "(senza titolo)")
         link = getattr(entry, "link", "")
@@ -290,7 +314,12 @@ def fetch_articoli(fonte, data_limite):
                 break
         articoli.append({"titolo": titolo, "url": link, "data": d, "excerpt": excerpt})
 
-    print(f"  [{sigla}] {len(articoli)} articolo/i in finestra")
+    if articoli:
+        print(f"  [{sigla}] {len(articoli)} articolo/i in finestra (su {totale} nel feed)")
+    else:
+        nota = f"ultimo del {piu_recente}" if piu_recente else "nessuna data leggibile"
+        extra = f", {senza_data} voci senza data" if senza_data else ""
+        print(f"  [{sigla}] NIENTE NUOVO — feed ok, {totale} voci, {nota}{extra}")
     return articoli
 
 # ------------------------------------------------------------------ #
