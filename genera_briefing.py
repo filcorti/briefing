@@ -14,7 +14,7 @@ USO
     python genera_briefing.py --esempio    # preview layout, nessuna API
 """
 
-import os, sys, html, datetime, re, time
+import os, sys, html, datetime, re, time, json
 from dateutil import parser as dateparser
 
 # ------------------------------------------------------------------ #
@@ -35,9 +35,6 @@ GRUPPI = [
                      "https://www.rusi.org/rss/latest-publications.xml"]},
             {"nome": "Jamestown – Eurasia Daily Monitor", "sigla": "JAMESTOWN",
              "rss": "https://jamestown.org/feed/"},
-            {"nome": "Gian Raffaele Percannella (Telegram COMFOG)", "sigla": "PERCANNELLA",
-             "tipo": "telegram", "canale": "comfog",
-             "sempre": True},   # mai scartato dalla prioritizzazione
             {"nome": "Carnegie Politika", "sigla": "POLITIKA",
              "rss": ["https://carnegieendowment.org/rss/politika.xml",
                      "https://carnegie.ru/feed",
@@ -374,6 +371,15 @@ def _fetch_telegram(fonte, data_limite):
         if tag_link and tag_link.get("href"):
             link = tag_link["href"]
 
+        # link esterni citati nel post: spesso il post e' un rilancio
+        # e l'articolo vero sta altrove
+        esterni = []
+        if tag_testo:
+            for a_ in tag_testo.select("a[href]"):
+                href = a_["href"]
+                if href.startswith("http") and "t.me" not in href:
+                    esterni.append(href)
+
         # il titolo e' la prima riga significativa, il resto resta nel corpo
         righe = [r_.strip() for r_ in testo.split("\n") if r_.strip()]
         titolo = righe[0][:180] if righe else "(post senza testo)"
@@ -384,6 +390,7 @@ def _fetch_telegram(fonte, data_limite):
             "data": d,
             "excerpt": testo[:1500],
             "telegram": True,          # segnala che il testo e' gia' completo
+            "link_esterni": esterni[:2],
         })
 
     if articoli:
@@ -542,6 +549,57 @@ def render_html(gruppi_dati, data_briefing):
     return "\n".join(righe)
 
 # ------------------------------------------------------------------ #
+#  ARCHIVIO ARTICOLI GIA' VISTI                                      #
+# ------------------------------------------------------------------ #
+
+ARCHIVIO = "visti.json"
+RITENZIONE_GIORNI = 45      # oltre questa soglia le voci vengono potate
+
+
+def chiave_articolo(art):
+    """Identificatore stabile di un articolo. Usa l'URL se c'e', altrimenti
+    il titolo: alcuni feed cambiano i parametri di tracking nell'URL, quindi
+    normalizzo togliendo la query string."""
+    url = (art.get("url") or "").split("?")[0].rstrip("/")
+    if url:
+        return url
+    return "titolo:" + art.get("titolo", "")[:120]
+
+
+def carica_visti():
+    """Ritorna dict {chiave: 'YYYY-MM-DD'}, potato delle voci vecchie."""
+    if not os.path.exists(ARCHIVIO):
+        print(f"Archivio assente: primo run, nessun filtro.")
+        return {}
+    try:
+        with open(ARCHIVIO, encoding="utf-8") as f:
+            dati = json.load(f)
+    except Exception as e:
+        print(f"Archivio illeggibile ({e}), riparto da zero.")
+        return {}
+
+    limite = (datetime.date.today() - datetime.timedelta(days=RITENZIONE_GIORNI)).isoformat()
+    potati = {k: v for k, v in dati.items() if v >= limite}
+    scartati = len(dati) - len(potati)
+    print(f"Archivio: {len(potati)} voci"
+          + (f" ({scartati} potate perche' oltre {RITENZIONE_GIORNI} giorni)" if scartati else ""))
+    return potati
+
+
+def salva_visti(visti, nuovi):
+    """Aggiunge le chiavi dei nuovi articoli e riscrive l'archivio."""
+    oggi = datetime.date.today().isoformat()
+    for art in nuovi:
+        visti[chiave_articolo(art)] = oggi
+    try:
+        with open(ARCHIVIO, "w", encoding="utf-8") as f:
+            json.dump(visti, f, ensure_ascii=False, indent=0, sort_keys=True)
+        print(f"Archivio aggiornato: {len(visti)} voci totali")
+    except Exception as e:
+        print(f"Non sono riuscito a scrivere l'archivio: {e}")
+
+
+# ------------------------------------------------------------------ #
 #  MAIN                                                              #
 # ------------------------------------------------------------------ #
 
@@ -617,6 +675,12 @@ def main():
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
 
+    usa_archivio = "--ignora-archivio" not in sys.argv
+    visti = carica_visti() if usa_archivio else None
+    if not usa_archivio:
+        print("Archivio ignorato (--ignora-archivio): rifaccio anche i gia' visti.")
+    tutti_selezionati = []
+
     gruppi_dati = []
     for gruppo in GRUPPI:
         print(f"\n{'='*50}")
@@ -630,6 +694,15 @@ def main():
             for art in fetch_articoli(fonte, data_limite):
                 candidati.append((fonte, art))
 
+        # --- FASE 1b: scarto quelli gia' visti nei run precedenti ---
+        if visti is not None:
+            prima = len(candidati)
+            candidati = [(f, a) for f, a in candidati
+                         if chiave_articolo(a) not in visti]
+            gia_visti = prima - len(candidati)
+            if gia_visti:
+                print(f"\n  Archivio: {gia_visti} gia' visti, {len(candidati)} nuovi")
+
         if not candidati:
             gruppi_dati.append((gruppo, []))
             continue
@@ -642,7 +715,16 @@ def main():
         for fonte, art in selezionati:
             print(f"    → {art['titolo'][:70]}...")
             if art.get("telegram"):
-                testo = art["excerpt"]          # il post e' gia' il testo completo
+                # il post e' gia' testo; se rilancia un articolo, provo a prenderlo
+                testo = art["excerpt"]
+                for href in art.get("link_esterni", []):
+                    esteso = estrai_testo(href)
+                    if esteso and len(esteso) > len(testo) * 1.5:
+                        print(f"      ↳ articolo esteso da {href[:60]} "
+                              f"({len(testo)} → {len(esteso)} car.)")
+                        testo = esteso
+                        art["url"] = href      # il link della scheda punta all'articolo
+                        break
             elif fonte.get("paywall"):
                 testo = None
             else:
@@ -665,12 +747,18 @@ def main():
                 per_fonte[k] = (fonte, [])
                 ordine.append(k)
             per_fonte[k][1].append(art)
+        tutti_selezionati.extend(a for _, a in selezionati)
         gruppi_dati.append((gruppo, [per_fonte[k] for k in ordine]))
 
     html_out = render_html(gruppi_dati, data_oggi)
     with open(nome_file, "w", encoding="utf-8") as f:
         f.write(html_out)
     print(f"\n✅ Scritto: {nome_file}")
+
+    # l'archivio si aggiorna solo se il briefing e' stato prodotto:
+    # se qualcosa fosse fallito prima, gli articoli restano "non visti"
+    if usa_archivio:
+        salva_visti(visti, tutti_selezionati)
 
 if __name__ == "__main__":
     main()
