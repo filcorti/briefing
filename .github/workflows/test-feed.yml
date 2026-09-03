@@ -1,0 +1,25 @@
+name: Test feed
+
+# Verifica quali RSS rispondono, SENZA chiamare l'API Anthropic.
+# Non ha schedule: si lancia solo a mano da Actions -> Run workflow.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Installa dipendenze
+        run: pip install feedparser requests python-dateutil
+
+      - name: Verifica i feed
+        env:
+          PYTHONUNBUFFERED: "1"
+        run: python genera_briefing.py --test-feed --giorni 3
